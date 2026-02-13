@@ -240,16 +240,16 @@ fi
 log_step "Deploy do painel"
 
 PANEL_COMPOSE="/tmp/panel-compose.yml"
-cat > "$PANEL_COMPOSE" <<EOF
+cat > "$PANEL_COMPOSE" <<'COMPOSEEOF'
 version: "3.8"
 services:
   n8nlabz_panel:
     image: n8nlabz-panel:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${INSTALL_DIR}/config.json:/opt/n8nlabz/config.json
-      - ${INSTALL_DIR}/tokens.json:/opt/n8nlabz/tokens.json
-      - ${INSTALL_DIR}/backups:/opt/n8nlabz/backups
+      - __INSTALL_DIR__/config.json:/opt/n8nlabz/config.json
+      - __INSTALL_DIR__/tokens.json:/opt/n8nlabz/tokens.json
+      - __INSTALL_DIR__/backups:/opt/n8nlabz/backups
     environment:
       - NODE_ENV=production
       - PORT=3080
@@ -261,13 +261,13 @@ services:
           - node.role == manager
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.n8nlabz.rule=Host(\`${DASHBOARD_DOMAIN}\`)"
+        - "traefik.http.routers.n8nlabz.rule=Host(`__DASHBOARD_DOMAIN__`)"
         - "traefik.http.routers.n8nlabz.entrypoints=websecure"
         - "traefik.http.routers.n8nlabz.tls.certresolver=letsencrypt"
         - "traefik.http.services.n8nlabz.loadbalancer.server.port=3080"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.n8nlabz.rule=Host(\`${DASHBOARD_DOMAIN}\`)"
+      - "traefik.http.routers.n8nlabz.rule=Host(`__DASHBOARD_DOMAIN__`)"
       - "traefik.http.routers.n8nlabz.entrypoints=websecure"
       - "traefik.http.routers.n8nlabz.tls.certresolver=letsencrypt"
       - "traefik.http.services.n8nlabz.loadbalancer.server.port=3080"
@@ -275,7 +275,9 @@ services:
 networks:
   network_public:
     external: true
-EOF
+COMPOSEEOF
+sed -i "s|__INSTALL_DIR__|${INSTALL_DIR}|g" "$PANEL_COMPOSE"
+sed -i "s|__DASHBOARD_DOMAIN__|${DASHBOARD_DOMAIN}|g" "$PANEL_COMPOSE"
 
 # Garantir que tokens.json exista
 touch "$INSTALL_DIR/tokens.json" 2>/dev/null || true
