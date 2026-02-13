@@ -97,11 +97,13 @@ else
   log_ok "network_public criada"
 fi
 
-# ── Salvar config ──
+# ── Salvar config temporariamente ──
 log_step "Configuração"
-mkdir -p "$INSTALL_DIR"/{backups,data}
+TMP_CONFIG="/tmp/n8nlabz-config.json"
+TMP_TOKENS="/tmp/n8nlabz-tokens.json"
+TMP_BACKUPS="/tmp/n8nlabz-backups"
 
-cat > "$CONFIG_FILE" <<EOF
+cat > "$TMP_CONFIG" <<EOF
 {
   "domain_base": "${BASE_DOMAIN}",
   "email_ssl": "${SSL_EMAIL}",
@@ -110,7 +112,11 @@ cat > "$CONFIG_FILE" <<EOF
 }
 EOF
 
-log_ok "Configuração salva em ${CONFIG_FILE}"
+# Preservar tokens e backups de instalação anterior
+[ -f "$INSTALL_DIR/tokens.json" ] && cp "$INSTALL_DIR/tokens.json" "$TMP_TOKENS"
+[ -d "$INSTALL_DIR/backups" ] && cp -r "$INSTALL_DIR/backups" "$TMP_BACKUPS"
+
+log_ok "Configuração preparada"
 
 # ── Traefik ──
 log_step "Traefik (Proxy Reverso + SSL)"
@@ -183,35 +189,25 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   cd "$INSTALL_DIR" && git pull >/dev/null 2>&1
   log_ok "Repositório atualizado"
 else
-  log_info "Clonando repositório..."
-  # Preservar backups, config e tokens de instalação anterior
-  if [ -d "$INSTALL_DIR" ]; then
-    log_info "Preservando dados existentes..."
-    TMP_PRESERVE="/tmp/n8nlabz-preserve-$$"
-    mkdir -p "$TMP_PRESERVE"
-    [ -f "$INSTALL_DIR/config.json" ] && cp "$INSTALL_DIR/config.json" "$TMP_PRESERVE/"
-    [ -f "$INSTALL_DIR/tokens.json" ] && cp "$INSTALL_DIR/tokens.json" "$TMP_PRESERVE/"
-    [ -d "$INSTALL_DIR/backups" ] && cp -r "$INSTALL_DIR/backups" "$TMP_PRESERVE/"
-    rm -rf "$INSTALL_DIR"
-  fi
+  # Remover diretório existente (config/tokens/backups já salvos em /tmp)
+  [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR"
 
+  log_info "Clonando repositório..."
   git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
     log_err "Falha ao clonar $REPO_URL"
     exit 1
   }
-
-  # Restaurar dados preservados
-  if [ -d "${TMP_PRESERVE:-/nonexistent}" ]; then
-    [ -f "$TMP_PRESERVE/config.json" ] && cp "$TMP_PRESERVE/config.json" "$INSTALL_DIR/"
-    [ -f "$TMP_PRESERVE/tokens.json" ] && cp "$TMP_PRESERVE/tokens.json" "$INSTALL_DIR/"
-    [ -d "$TMP_PRESERVE/backups" ] && cp -r "$TMP_PRESERVE/backups" "$INSTALL_DIR/"
-    rm -rf "$TMP_PRESERVE"
-    log_ok "Dados anteriores restaurados"
-  fi
-
-  mkdir -p "$INSTALL_DIR"/{backups,data}
   log_ok "Repositório clonado em $INSTALL_DIR"
 fi
+
+# Restaurar config, tokens e backups
+cp "$TMP_CONFIG" "$INSTALL_DIR/config.json"
+[ -f "$TMP_TOKENS" ] && cp "$TMP_TOKENS" "$INSTALL_DIR/tokens.json"
+[ -d "$TMP_BACKUPS" ] && cp -r "$TMP_BACKUPS" "$INSTALL_DIR/backups"
+rm -f "$TMP_CONFIG" "$TMP_TOKENS"
+rm -rf "$TMP_BACKUPS"
+mkdir -p "$INSTALL_DIR"/{backups,data}
+log_ok "Configuração restaurada em $INSTALL_DIR"
 
 # Verificar arquivos essenciais
 if [ ! -f "$INSTALL_DIR/Dockerfile" ] || [ ! -d "$INSTALL_DIR/backend" ] || [ ! -d "$INSTALL_DIR/frontend" ]; then
