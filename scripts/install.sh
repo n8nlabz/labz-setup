@@ -40,21 +40,22 @@ banner
 # ── Perguntar domínio e email ──
 log_step "Configuração de domínio"
 echo ""
-read -p "  Qual seu domínio base? (ex: seudominio.com): " BASE_DOMAIN
 
+BASE_DOMAIN=""
 while [ -z "$BASE_DOMAIN" ]; do
-  log_warn "Domínio base é obrigatório."
-  read -p "  Qual seu domínio base? (ex: seudominio.com): " BASE_DOMAIN
+  printf "  Qual seu domínio base? (ex: seudominio.com): " >&2
+  read BASE_DOMAIN < /dev/tty
+  # Remover protocolo, espaços e barras
+  BASE_DOMAIN=$(echo "$BASE_DOMAIN" | sed 's|https\?://||' | sed 's|/||g' | xargs)
+  [ -z "$BASE_DOMAIN" ] && log_warn "Domínio base é obrigatório."
 done
 
-# Remover protocolo se digitado
-BASE_DOMAIN=$(echo "$BASE_DOMAIN" | sed 's|https\?://||' | sed 's|/||g')
-
-read -p "  Qual seu email para SSL? (Let's Encrypt): " SSL_EMAIL
-
+SSL_EMAIL=""
 while [ -z "$SSL_EMAIL" ]; do
-  log_warn "Email SSL é obrigatório."
-  read -p "  Qual seu email para SSL? (Let's Encrypt): " SSL_EMAIL
+  printf "  Qual seu email para SSL? (Let's Encrypt): " >&2
+  read SSL_EMAIL < /dev/tty
+  SSL_EMAIL=$(echo "$SSL_EMAIL" | xargs)
+  [ -z "$SSL_EMAIL" ] && log_warn "Email SSL é obrigatório."
 done
 
 DASHBOARD_DOMAIN="dashboard.${BASE_DOMAIN}"
