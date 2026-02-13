@@ -9,7 +9,7 @@ BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
 MAGENTA='\033[0;35m'
 
 INSTALL_DIR="/opt/n8nlabz"
-REPO_URL="https://github.com/n8nlabz/setup-panel"
+REPO_URL="https://github.com/n8nlabz/labz-setup.git"
 CONFIG_FILE="$INSTALL_DIR/config.json"
 
 banner() {
@@ -171,22 +171,52 @@ log_ok "Traefik rodando com SSL via Let's Encrypt"
 
 # ── Download Panel ──
 log_step "N8N LABZ Panel"
+
+# Garantir que git está instalado
+if ! command -v git &>/dev/null; then
+  log_info "Instalando git..."
+  apt-get install -y git >/dev/null 2>&1
+fi
+
 if [ -d "$INSTALL_DIR/.git" ]; then
-  log_info "Atualizando..."
+  log_info "Atualizando repositório..."
   cd "$INSTALL_DIR" && git pull >/dev/null 2>&1
+  log_ok "Repositório atualizado"
 else
-  log_info "Baixando..."
-  if command -v git &>/dev/null; then
-    git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
-      log_warn "Git clone falhou. Certifique-se de que o repositório existe."
-      log_info "Usando arquivos locais se disponíveis..."
-    }
-  else
-    apt-get install -y git >/dev/null 2>&1
-    git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
-      log_warn "Repositório não disponível. Copie os arquivos manualmente para $INSTALL_DIR"
-    }
+  log_info "Clonando repositório..."
+  # Preservar backups, config e tokens de instalação anterior
+  if [ -d "$INSTALL_DIR" ]; then
+    log_info "Preservando dados existentes..."
+    TMP_PRESERVE="/tmp/n8nlabz-preserve-$$"
+    mkdir -p "$TMP_PRESERVE"
+    [ -f "$INSTALL_DIR/config.json" ] && cp "$INSTALL_DIR/config.json" "$TMP_PRESERVE/"
+    [ -f "$INSTALL_DIR/tokens.json" ] && cp "$INSTALL_DIR/tokens.json" "$TMP_PRESERVE/"
+    [ -d "$INSTALL_DIR/backups" ] && cp -r "$INSTALL_DIR/backups" "$TMP_PRESERVE/"
+    rm -rf "$INSTALL_DIR"
   fi
+
+  git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
+    log_err "Falha ao clonar $REPO_URL"
+    exit 1
+  }
+
+  # Restaurar dados preservados
+  if [ -d "${TMP_PRESERVE:-/nonexistent}" ]; then
+    [ -f "$TMP_PRESERVE/config.json" ] && cp "$TMP_PRESERVE/config.json" "$INSTALL_DIR/"
+    [ -f "$TMP_PRESERVE/tokens.json" ] && cp "$TMP_PRESERVE/tokens.json" "$INSTALL_DIR/"
+    [ -d "$TMP_PRESERVE/backups" ] && cp -r "$TMP_PRESERVE/backups" "$INSTALL_DIR/"
+    rm -rf "$TMP_PRESERVE"
+    log_ok "Dados anteriores restaurados"
+  fi
+
+  mkdir -p "$INSTALL_DIR"/{backups,data}
+  log_ok "Repositório clonado em $INSTALL_DIR"
+fi
+
+# Verificar arquivos essenciais
+if [ ! -f "$INSTALL_DIR/Dockerfile" ] || [ ! -d "$INSTALL_DIR/backend" ] || [ ! -d "$INSTALL_DIR/frontend" ]; then
+  log_err "Arquivos essenciais não encontrados em $INSTALL_DIR (Dockerfile, backend/, frontend/)"
+  exit 1
 fi
 
 # ── Build e deploy como container Docker ──
