@@ -10,7 +10,8 @@ class InstallService {
   }
 
   static hostRule(domain) {
-    return "Host(" + "`" + domain + "`" + ")";
+    var bt = String.fromCharCode(96);
+    return "Host(" + bt + domain + bt + ")";
   }
 
   static loadConfig() {
