@@ -117,36 +117,31 @@ function Terminal({ logs }) {
 
 // ─── Login Page ───
 function LoginPage({ onLogin }) {
-  const [token, setTk] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [setupMode, setSetupMode] = useState(false);
-  const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    const token = getToken();
+    if (!token) { setLoading(false); return; }
     api('/auth/check').then((d) => {
-      if (d.setup_required) setSetupMode(true);
-      else if (d.valid) onLogin();
-      setLoading(false);
-    }).catch(() => setLoading(false));
+      if (d.valid) onLogin();
+      else { clearToken(); setLoading(false); }
+    }).catch(() => { clearToken(); setLoading(false); });
   }, []);
 
   const handleLogin = async () => {
+    if (!email || !password) { setError('Preencha email e senha'); return; }
     setError('');
-    setToken(token);
+    setSubmitting(true);
     try {
-      const d = await api('/auth/check');
-      if (d.valid) onLogin();
-      else { setError('Token inválido'); clearToken(); }
-    } catch (e) { setError(e.message); clearToken(); }
-  };
-
-  const handleSetup = async () => {
-    try {
-      const d = await api('/auth/setup', { method: 'POST', body: JSON.stringify({ label: label || 'admin' }) });
-      setToken(d.token);
-      onLogin();
+      const d = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+      if (d.token) { setToken(d.token); onLogin(); }
+      else setError('Credenciais inválidas');
     } catch (e) { setError(e.message); }
+    setSubmitting(false);
   };
 
   if (loading) return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spinner size={32} /></div>;
@@ -164,32 +159,19 @@ function LoginPage({ onLogin }) {
         </div>
 
         <Card style={{ padding: 28 }}>
-          {setupMode ? (
-            <>
-              <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Primeiro Acesso</h3>
-              <p style={{ fontSize: 13, color: colors.textMuted, marginBottom: 20, lineHeight: 1.6 }}>
-                Crie seu token de admin para acessar o painel.
-              </p>
-              <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Seu nome (opcional)"
-                style={{ width: '100%', padding: '12px 16px', borderRadius: 10, border: `1px solid ${colors.border}`, background: 'rgba(0,0,0,0.3)', color: '#fff', fontSize: 14, fontFamily: mono, outline: 'none', marginBottom: 16 }} />
-              <Btn onClick={handleSetup} style={{ width: '100%', padding: '14px', justifyContent: 'center' }}>
-                🔑 Gerar Token de Acesso
-              </Btn>
-            </>
-          ) : (
-            <>
-              <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Acesso ao Painel</h3>
-              <p style={{ fontSize: 13, color: colors.textMuted, marginBottom: 20 }}>
-                Insira seu token N8N LABZ para continuar.
-              </p>
-              <input value={token} onChange={(e) => setTk(e.target.value)} placeholder="labz_xxxxxxxx..."
-                style={{ width: '100%', padding: '12px 16px', borderRadius: 10, border: `1px solid ${colors.border}`, background: 'rgba(0,0,0,0.3)', color: '#fff', fontSize: 14, fontFamily: mono, outline: 'none', marginBottom: 16 }}
-                onKeyDown={(e) => e.key === 'Enter' && handleLogin()} />
-              <Btn onClick={handleLogin} style={{ width: '100%', padding: '14px', justifyContent: 'center' }}>
-                Entrar
-              </Btn>
-            </>
-          )}
+          <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Acesso ao Painel</h3>
+          <p style={{ fontSize: 13, color: colors.textMuted, marginBottom: 20 }}>
+            Entre com seu email e senha de administrador.
+          </p>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@email.com" type="email"
+            style={{ width: '100%', padding: '12px 16px', borderRadius: 10, border: `1px solid ${colors.border}`, background: 'rgba(0,0,0,0.3)', color: '#fff', fontSize: 14, fontFamily: mono, outline: 'none', marginBottom: 12, boxSizing: 'border-box' }}
+            onKeyDown={(e) => e.key === 'Enter' && handleLogin()} />
+          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Senha" type="password"
+            style={{ width: '100%', padding: '12px 16px', borderRadius: 10, border: `1px solid ${colors.border}`, background: 'rgba(0,0,0,0.3)', color: '#fff', fontSize: 14, fontFamily: mono, outline: 'none', marginBottom: 16, boxSizing: 'border-box' }}
+            onKeyDown={(e) => e.key === 'Enter' && handleLogin()} />
+          <Btn onClick={handleLogin} loading={submitting} disabled={submitting} style={{ width: '100%', padding: '14px', justifyContent: 'center' }}>
+            Entrar
+          </Btn>
           {error && <p style={{ color: colors.red, fontSize: 12, marginTop: 12, textAlign: 'center' }}>{error}</p>}
         </Card>
       </div>

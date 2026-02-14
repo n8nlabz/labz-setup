@@ -1,15 +1,15 @@
 const API_BASE = '/api';
 
 function getToken() {
-  return localStorage.getItem('n8nlabz_token') || '';
+  return localStorage.getItem('n8nlabz_jwt') || '';
 }
 
 function setToken(token) {
-  localStorage.setItem('n8nlabz_token', token);
+  localStorage.setItem('n8nlabz_jwt', token);
 }
 
 function clearToken() {
-  localStorage.removeItem('n8nlabz_token');
+  localStorage.removeItem('n8nlabz_jwt');
 }
 
 async function api(endpoint, options = {}) {

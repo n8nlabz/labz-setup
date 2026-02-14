@@ -37,6 +37,9 @@ log_step() { echo -e "\n  ${MAGENTA}▸${NC} ${BOLD}$1${NC}"; }
 
 banner
 
+echo -e "  ${BOLD}Bem-vindo ao instalador do N8N LABZ Setup Panel!${NC}"
+echo -e "  Vamos configurar tudo em poucos minutos.\n"
+
 # ── Perguntar domínio e email ──
 log_step "Configuração de domínio"
 echo ""
@@ -45,7 +48,6 @@ BASE_DOMAIN=""
 while [ -z "$BASE_DOMAIN" ]; do
   printf "  Qual seu domínio base? (ex: seudominio.com): " >&2
   read BASE_DOMAIN < /dev/tty
-  # Remover protocolo, espaços e barras
   BASE_DOMAIN=$(echo "$BASE_DOMAIN" | sed 's|https\?://||' | sed 's|/||g' | xargs)
   [ -z "$BASE_DOMAIN" ] && log_warn "Domínio base é obrigatório."
 done
@@ -64,6 +66,44 @@ echo ""
 log_ok "Domínio base: ${BASE_DOMAIN}"
 log_ok "Email SSL: ${SSL_EMAIL}"
 log_ok "Painel: ${DASHBOARD_DOMAIN}"
+
+# ── Credenciais do admin ──
+log_step "Credenciais de acesso ao painel"
+echo ""
+
+ADMIN_EMAIL=""
+while [ -z "$ADMIN_EMAIL" ]; do
+  printf "  Email do administrador: " >&2
+  read ADMIN_EMAIL < /dev/tty
+  ADMIN_EMAIL=$(echo "$ADMIN_EMAIL" | xargs)
+  [ -z "$ADMIN_EMAIL" ] && log_warn "Email do admin é obrigatório."
+done
+
+ADMIN_PASS=""
+while true; do
+  printf "  Senha do administrador: " >&2
+  read -s ADMIN_PASS < /dev/tty
+  echo ""
+  if [ -z "$ADMIN_PASS" ]; then
+    log_warn "Senha é obrigatória."
+    continue
+  fi
+  printf "  Confirme a senha: " >&2
+  read -s ADMIN_PASS2 < /dev/tty
+  echo ""
+  if [ "$ADMIN_PASS" != "$ADMIN_PASS2" ]; then
+    log_warn "As senhas não coincidem. Tente novamente."
+    ADMIN_PASS=""
+    continue
+  fi
+  break
+done
+
+ADMIN_PASS_HASH=$(echo -n "$ADMIN_PASS" | sha256sum | cut -d' ' -f1)
+
+echo ""
+log_ok "Admin: ${ADMIN_EMAIL}"
+log_ok "Senha configurada com sucesso"
 echo ""
 
 # ── Docker ──
@@ -100,7 +140,6 @@ fi
 # ── Salvar config temporariamente ──
 log_step "Configuração"
 TMP_CONFIG="/tmp/n8nlabz-config.json"
-TMP_TOKENS="/tmp/n8nlabz-tokens.json"
 TMP_BACKUPS="/tmp/n8nlabz-backups"
 
 cat > "$TMP_CONFIG" <<EOF
@@ -108,12 +147,13 @@ cat > "$TMP_CONFIG" <<EOF
   "domain_base": "${BASE_DOMAIN}",
   "email_ssl": "${SSL_EMAIL}",
   "dashboard_domain": "${DASHBOARD_DOMAIN}",
+  "admin_email": "${ADMIN_EMAIL}",
+  "admin_password_hash": "${ADMIN_PASS_HASH}",
   "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
 
-# Preservar tokens e backups de instalação anterior
-[ -f "$INSTALL_DIR/tokens.json" ] && cp "$INSTALL_DIR/tokens.json" "$TMP_TOKENS"
+# Preservar backups de instalação anterior
 [ -d "$INSTALL_DIR/backups" ] && cp -r "$INSTALL_DIR/backups" "$TMP_BACKUPS"
 
 log_ok "Configuração preparada"
@@ -189,7 +229,7 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   cd "$INSTALL_DIR" && git pull >/dev/null 2>&1
   log_ok "Repositório atualizado"
 else
-  # Remover diretório existente (config/tokens/backups já salvos em /tmp)
+  # Remover diretório existente (config/backups já salvos em /tmp)
   [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR"
 
   log_info "Clonando repositório..."
@@ -200,11 +240,10 @@ else
   log_ok "Repositório clonado em $INSTALL_DIR"
 fi
 
-# Restaurar config, tokens e backups
+# Restaurar config e backups
 cp "$TMP_CONFIG" "$INSTALL_DIR/config.json"
-[ -f "$TMP_TOKENS" ] && cp "$TMP_TOKENS" "$INSTALL_DIR/tokens.json"
 [ -d "$TMP_BACKUPS" ] && cp -r "$TMP_BACKUPS" "$INSTALL_DIR/backups"
-rm -f "$TMP_CONFIG" "$TMP_TOKENS"
+rm -f "$TMP_CONFIG"
 rm -rf "$TMP_BACKUPS"
 mkdir -p "$INSTALL_DIR"/{backups,data}
 log_ok "Configuração restaurada em $INSTALL_DIR"
@@ -249,7 +288,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - __INSTALL_DIR__/config.json:/opt/n8nlabz/config.json
-      - __INSTALL_DIR__/tokens.json:/opt/n8nlabz/tokens.json
       - __INSTALL_DIR__/backups:/opt/n8nlabz/backups
     environment:
       - NODE_ENV=production
@@ -281,9 +319,6 @@ COMPOSEEOF
 sed -i "s|__INSTALL_DIR__|${INSTALL_DIR}|g" "$PANEL_COMPOSE"
 sed -i "s|__DASHBOARD_DOMAIN__|${DASHBOARD_DOMAIN}|g" "$PANEL_COMPOSE"
 
-# Garantir que tokens.json exista
-touch "$INSTALL_DIR/tokens.json" 2>/dev/null || true
-
 log_info "Fazendo deploy do painel..."
 if [ "$IS_SWARM" = "true" ]; then
   docker stack deploy -c "$PANEL_COMPOSE" panel >/dev/null 2>&1
@@ -297,14 +332,57 @@ log_ok "Painel rodando em https://${DASHBOARD_DOMAIN}"
 log_info "Aguardando containers estabilizarem..."
 sleep 8
 
-# ── Summary ──
+# ── DNS ──
 IP=$(curl -s --max-time 5 ifconfig.me || hostname -I | awk '{print $1}')
+
+echo ""
+echo -e "  ═══════════════════════════════════════════════════════"
+echo -e "  ${YELLOW}${BOLD}⚠  Configuração de DNS${NC}"
+echo ""
+echo -e "  ${BOLD}Antes de acessar o painel, configure o DNS:${NC}"
+echo ""
+echo -e "  ${CYAN}  dashboard.${BASE_DOMAIN}  →  ${IP}${NC}"
+echo -e "  ${CYAN}  portainer.${BASE_DOMAIN}   →  ${IP}${NC}"
+echo -e "  ${CYAN}  n8n.${BASE_DOMAIN}         →  ${IP}${NC}"
+echo -e "  ${CYAN}  evolution.${BASE_DOMAIN}    →  ${IP}${NC}"
+echo ""
+echo -e "  ${BOLD}Crie registros tipo A apontando para: ${IP}${NC}"
+echo -e "  ═══════════════════════════════════════════════════════"
+echo ""
+
+DNS_OK=""
+while [ -z "$DNS_OK" ]; do
+  printf "  Já configurou o DNS? (sim/não): " >&2
+  read DNS_OK < /dev/tty
+  DNS_OK=$(echo "$DNS_OK" | xargs | tr '[:upper:]' '[:lower:]')
+  case "$DNS_OK" in
+    sim|s|yes|y)
+      echo ""
+      log_ok "DNS configurado!"
+      ;;
+    nao|não|n|no)
+      echo ""
+      log_warn "Configure o DNS antes de acessar o painel."
+      log_info "Você pode configurar depois e acessar quando estiver pronto."
+      ;;
+    *)
+      log_warn "Responda sim ou não."
+      DNS_OK=""
+      ;;
+  esac
+done
+
+# ── Summary ──
 echo ""
 echo -e "  ═══════════════════════════════════════════════════════"
 echo -e "  ${GREEN}${BOLD}✅ Instalação concluída!${NC}"
 echo ""
 echo -e "  ${BOLD}Acesse o painel:${NC}"
 echo -e "  ${CYAN}➜  https://${DASHBOARD_DOMAIN}${NC}"
+echo ""
+echo -e "  ${BOLD}Login:${NC}"
+echo -e "  ${CYAN}  Email: ${ADMIN_EMAIL}${NC}"
+echo -e "  ${CYAN}  Senha: (a que você definiu)${NC}"
 echo ""
 echo -e "  ${BOLD}Domínio base:${NC} ${BASE_DOMAIN}"
 echo -e "  ${BOLD}Subdomínios sugeridos:${NC}"
@@ -313,10 +391,6 @@ echo -e "  ${CYAN}  • n8n:        n8n.${BASE_DOMAIN}${NC}"
 echo -e "  ${CYAN}  • Evolution:  evolution.${BASE_DOMAIN}${NC}"
 echo ""
 echo -e "  ${YELLOW}⚠  Configure o DNS dos subdomínios apontando para: ${IP}${NC}"
-echo ""
-echo -e "  ${BOLD}No primeiro acesso:${NC}"
-echo -e "  O painel gera um token admin automaticamente."
-echo -e "  ${YELLOW}Guarde esse token! Ele é sua chave de acesso.${NC}"
 echo ""
 echo -e "  ${BOLD}Comandos úteis:${NC}"
 echo -e "  ${CYAN}docker logs -f \$(docker ps -q -f name=n8nlabz_panel)${NC}  — Logs"

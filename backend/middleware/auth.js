@@ -1,65 +1,59 @@
 const crypto = require("crypto");
 const fs = require("fs");
-const path = require("path");
 
-const DATA_DIR = "/opt/n8nlabz";
-const TOKENS_PATH = path.join(DATA_DIR, "tokens.json");
+const CONFIG_PATH = "/opt/n8nlabz/config.json";
+const JWT_SECRET = process.env.JWT_SECRET || "n8nlabz_" + (fs.existsSync(CONFIG_PATH) ? require(CONFIG_PATH).installed_at || "secret" : "secret");
 
-function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+function sha256(str) {
+  return crypto.createHash("sha256").update(str).digest("hex");
 }
 
-function loadTokens() {
-  ensureDir();
+function loadConfig() {
   try {
-    if (fs.existsSync(TOKENS_PATH)) return JSON.parse(fs.readFileSync(TOKENS_PATH, "utf-8"));
+    if (fs.existsSync(CONFIG_PATH)) {
+      return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+    }
   } catch {}
-  return [];
+  return {};
 }
 
-function saveTokens(tokens) {
-  ensureDir();
-  fs.writeFileSync(TOKENS_PATH, JSON.stringify(tokens, null, 2));
+function createJWT(payload) {
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify({ ...payload, iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 7 * 24 * 3600 })).toString("base64url");
+  const signature = crypto.createHmac("sha256", JWT_SECRET).update(`${header}.${body}`).digest("base64url");
+  return `${header}.${body}.${signature}`;
 }
 
-function generateToken(label = "default") {
-  const token = `labz_${crypto.randomBytes(24).toString("hex")}`;
-  const tokens = loadTokens();
-  tokens.push({ token, label, created_at: new Date().toISOString(), last_used: null, active: true });
-  saveTokens(tokens);
-  return token;
-}
-
-function validateToken(token) {
-  const tokens = loadTokens();
-  const found = tokens.find((t) => t.token === token && t.active);
-  if (found) {
-    found.last_used = new Date().toISOString();
-    saveTokens(tokens);
-    return true;
+function verifyJWT(token) {
+  try {
+    const [header, body, signature] = token.split(".");
+    if (!header || !body || !signature) return null;
+    const expected = crypto.createHmac("sha256", JWT_SECRET).update(`${header}.${body}`).digest("base64url");
+    if (signature !== expected) return null;
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString());
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
   }
-  return false;
 }
 
-function revokeToken(token) {
-  const tokens = loadTokens();
-  const found = tokens.find((t) => t.token === token);
-  if (found) { found.active = false; saveTokens(tokens); return true; }
-  return false;
+function validateLogin(email, password) {
+  const config = loadConfig();
+  if (!config.admin_email || !config.admin_password_hash) return false;
+  return config.admin_email === email && config.admin_password_hash === sha256(password);
 }
 
 function authMiddleware(req, res, next) {
-  const tokens = loadTokens();
-  // First setup: no tokens = allow
-  if (tokens.length === 0) return next();
-
-  let token = null;
   const auth = req.headers.authorization;
-  if (auth && auth.startsWith("Bearer ")) token = auth.slice(7);
-  if (!token) token = req.headers["x-api-key"];
-  if (!token) return res.status(401).json({ error: "Token não fornecido" });
-  if (!validateToken(token)) return res.status(403).json({ error: "Token inválido" });
+  if (!auth || !auth.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Token não fornecido" });
+  }
+  const token = auth.slice(7);
+  const payload = verifyJWT(token);
+  if (!payload) return res.status(403).json({ error: "Token inválido ou expirado" });
+  req.user = payload;
   next();
 }
 
-module.exports = { authMiddleware, generateToken, validateToken, revokeToken, loadTokens, saveTokens };
+module.exports = { authMiddleware, createJWT, verifyJWT, validateLogin, sha256, loadConfig };
