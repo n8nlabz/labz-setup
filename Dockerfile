@@ -10,6 +10,8 @@ RUN npx vite build
 # ─── Production ───
 FROM node:20-alpine
 
+RUN apk add --no-cache docker-cli docker-cli-compose
+
 WORKDIR /app
 
 COPY backend/package*.json ./backend/
