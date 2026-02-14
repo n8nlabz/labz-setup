@@ -11,6 +11,8 @@ const containersRoutes = require("./routes/containers");
 const backupRoutes = require("./routes/backup");
 const authRoutes = require("./routes/auth");
 const systemRoutes = require("./routes/system");
+const credentialsRoutes = require("./routes/credentials");
+const BackupService = require("./services/backup");
 
 const app = express();
 expressWs(app);
@@ -29,6 +31,19 @@ const limiter = rateLimit({
 });
 app.use("/api/", limiter);
 
+// WebSocket clients
+const wsClients = new Set();
+
+app.locals.broadcast = (msg) => {
+  const data = JSON.stringify(msg);
+  wsClients.forEach((ws) => {
+    try { ws.send(data); } catch {}
+  });
+};
+
+// Share wsClients with BackupService
+BackupService.wsClients = wsClients;
+
 // Public routes
 app.use("/api/auth", authRoutes);
 
@@ -37,13 +52,13 @@ app.use("/api/install", authMiddleware, installRoutes);
 app.use("/api/containers", authMiddleware, containersRoutes);
 app.use("/api/backup", authMiddleware, backupRoutes);
 app.use("/api/system", authMiddleware, systemRoutes);
+app.use("/api/credentials", authMiddleware, credentialsRoutes);
 
 // WebSocket for real-time logs
 app.ws("/api/ws/logs", (ws, req) => {
-  ws.on("message", (msg) => {
-    // Client can send commands via WS
-  });
-  ws.on("close", () => {});
+  wsClients.add(ws);
+  ws.on("close", () => wsClients.delete(ws));
+  ws.on("error", () => wsClients.delete(ws));
 });
 
 // Serve frontend
@@ -57,7 +72,7 @@ app.get("*", (req, res) => {
   } else {
     res.json({
       name: "N8N LABZ Setup Panel API",
-      version: "1.0.0",
+      version: "2.0.0",
       status: "running",
       docs: "Frontend not built. Run: npm run build:frontend",
     });
@@ -73,10 +88,13 @@ app.use((err, req, res, next) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("  ╔══════════════════════════════════════════╗");
-  console.log("  ║     🚀 N8N LABZ Setup Panel v1.0        ║");
+  console.log("  ║     N8N LABZ Setup Panel v2.0            ║");
   console.log(`  ║     Porta: ${PORT}                          ║`);
   console.log("  ╚══════════════════════════════════════════╝");
   console.log("");
+
+  // Start backup scheduler
+  BackupService.initScheduler();
 });
 
 module.exports = app;

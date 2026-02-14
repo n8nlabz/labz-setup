@@ -38,4 +38,39 @@ async function apiUpload(endpoint, file) {
   return data;
 }
 
-export { api, apiUpload, getToken, setToken, clearToken };
+function connectWebSocket(onMessage) {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${window.location.host}/api/ws/logs`;
+  let ws = null;
+  let reconnectTimer = null;
+
+  function connect() {
+    ws = new WebSocket(url);
+    ws.onopen = () => {};
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (onMessage) onMessage(data);
+      } catch {}
+    };
+    ws.onclose = () => {
+      reconnectTimer = setTimeout(connect, 3000);
+    };
+    ws.onerror = () => {
+      ws.close();
+    };
+  }
+
+  connect();
+
+  return () => {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (ws) ws.close();
+  };
+}
+
+async function fetchCredentials() {
+  return api('/credentials');
+}
+
+export { api, apiUpload, getToken, setToken, clearToken, connectWebSocket, fetchCredentials };

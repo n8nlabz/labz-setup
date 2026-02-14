@@ -37,58 +37,42 @@ log_step() { echo -e "\n  ${MAGENTA}▸${NC} ${BOLD}$1${NC}"; }
 
 banner
 
-echo -e "  ${BOLD}Bem-vindo ao instalador do N8N LABZ Setup Panel!${NC}"
-echo -e "  Vamos configurar tudo em poucos minutos.\n"
+echo -e "  👋 ${BOLD}Bem-vindo ao N8N LABZ Setup Panel!${NC}"
+echo -e "  Vamos preparar sua VPS em poucos minutos."
+echo -e "  Relaxa que é tudo automático 😎\n"
 
-# ── Perguntar domínio e email ──
-log_step "Configuração de domínio"
+# ══════════════════════════════════════
+# COLETA DE DADOS (3 perguntas)
+# ══════════════════════════════════════
+log_step "Configuração inicial"
 echo ""
 
 BASE_DOMAIN=""
 while [ -z "$BASE_DOMAIN" ]; do
-  printf "  Qual seu domínio base? (ex: seudominio.com): " >&2
+  printf "  📌 Qual seu domínio base? (ex: seudominio.com): " >&2
   read BASE_DOMAIN < /dev/tty
   BASE_DOMAIN=$(echo "$BASE_DOMAIN" | sed 's|https\?://||' | sed 's|/||g' | xargs)
   [ -z "$BASE_DOMAIN" ] && log_warn "Domínio base é obrigatório."
 done
 
-SSL_EMAIL=""
-while [ -z "$SSL_EMAIL" ]; do
-  printf "  Qual seu email para SSL? (Let's Encrypt): " >&2
-  read SSL_EMAIL < /dev/tty
-  SSL_EMAIL=$(echo "$SSL_EMAIL" | xargs)
-  [ -z "$SSL_EMAIL" ] && log_warn "Email SSL é obrigatório."
-done
-
-DASHBOARD_DOMAIN="dashboard.${BASE_DOMAIN}"
-
-echo ""
-log_ok "Domínio base: ${BASE_DOMAIN}"
-log_ok "Email SSL: ${SSL_EMAIL}"
-log_ok "Painel: ${DASHBOARD_DOMAIN}"
-
-# ── Credenciais do admin ──
-log_step "Credenciais de acesso ao painel"
-echo ""
-
 ADMIN_EMAIL=""
 while [ -z "$ADMIN_EMAIL" ]; do
-  printf "  Email do administrador: " >&2
+  printf "  📧 Seu email (para login e certificado SSL): " >&2
   read ADMIN_EMAIL < /dev/tty
   ADMIN_EMAIL=$(echo "$ADMIN_EMAIL" | xargs)
-  [ -z "$ADMIN_EMAIL" ] && log_warn "Email do admin é obrigatório."
+  [ -z "$ADMIN_EMAIL" ] && log_warn "Email é obrigatório."
 done
 
 ADMIN_PASS=""
 while true; do
-  printf "  Senha do administrador: " >&2
+  printf "  🔒 Senha do administrador: " >&2
   read -s ADMIN_PASS < /dev/tty
   echo ""
   if [ -z "$ADMIN_PASS" ]; then
     log_warn "Senha é obrigatória."
     continue
   fi
-  printf "  Confirme a senha: " >&2
+  printf "  🔒 Confirme a senha: " >&2
   read -s ADMIN_PASS2 < /dev/tty
   echo ""
   if [ "$ADMIN_PASS" != "$ADMIN_PASS2" ]; then
@@ -101,122 +85,249 @@ done
 
 ADMIN_PASS_HASH=$(echo -n "$ADMIN_PASS" | sha256sum | cut -d' ' -f1)
 
+DASHBOARD_DOMAIN="dashboard.${BASE_DOMAIN}"
+PORTAINER_DOMAIN="portainer.${BASE_DOMAIN}"
+
 echo ""
-log_ok "Admin: ${ADMIN_EMAIL}"
-log_ok "Senha configurada com sucesso"
+log_ok "Domínio base: ${BASE_DOMAIN}"
+log_ok "Email: ${ADMIN_EMAIL}"
+log_ok "Painel: ${DASHBOARD_DOMAIN}"
+log_ok "Portainer: ${PORTAINER_DOMAIN}"
 echo ""
 
-# ── Docker ──
-log_step "Docker"
+# ══════════════════════════════════════
+# ATUALIZAÇÃO DO SISTEMA
+# ══════════════════════════════════════
+log_step "🔧 Atualizando seu servidor..."
+log_info "Isso garante que tudo funcione direitinho"
+apt-get update >/dev/null 2>&1
+apt-get upgrade -y >/dev/null 2>&1
+log_ok "Servidor atualizado!"
+
+log_info "Instalando dependências..."
+apt-get install -y curl wget git jq >/dev/null 2>&1
+log_ok "Dependências instaladas!"
+
+# ══════════════════════════════════════
+# DOCKER
+# ══════════════════════════════════════
+log_step "🐳 Docker"
 if command -v docker &>/dev/null; then
-  log_ok "Docker $(docker --version | cut -d' ' -f3 | cut -d',' -f1)"
+  log_ok "Docker $(docker --version | cut -d' ' -f3 | cut -d',' -f1) já instalado"
 else
-  log_info "Instalando Docker..."
+  log_info "Instalando o Docker... (é ele que roda todas as ferramentas)"
   curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
   systemctl enable docker >/dev/null 2>&1 && systemctl start docker >/dev/null 2>&1
-  log_ok "Docker instalado"
+  log_ok "Docker instalado!"
 fi
 
 # ── Swarm ──
-log_step "Docker Swarm"
+log_step "🌐 Docker Swarm"
 SWARM=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)
 if [ "$SWARM" = "active" ]; then
-  log_ok "Swarm ativo"
+  log_ok "Swarm já está ativo"
 else
   IP=$(curl -s --max-time 5 ifconfig.me || hostname -I | awk '{print $1}')
   docker swarm init --advertise-addr "$IP" >/dev/null 2>&1
   log_ok "Swarm inicializado ($IP)"
 fi
 
-# ── Network ──
-log_step "Rede Docker"
+# ── Rede ──
+log_step "🌐 Rede interna"
+log_info "Configurando a rede interna... (pra suas ferramentas se comunicarem)"
 if docker network ls | grep -q network_public; then
-  log_ok "network_public existe"
+  log_ok "network_public já existe"
 else
   docker network create --driver overlay --attachable network_public >/dev/null 2>&1
-  log_ok "network_public criada"
+  log_ok "Rede network_public criada!"
 fi
 
-# ── Salvar config temporariamente ──
-log_step "Configuração"
-TMP_CONFIG="/tmp/n8nlabz-config.json"
-TMP_BACKUPS="/tmp/n8nlabz-backups"
+# ── Volumes ──
+log_step "📁 Volumes Docker"
+log_info "Criando volumes para armazenamento persistente..."
+for vol in volume_swarm_certificates volume_swarm_shared portainer_data postgres_data n8n_redis evolution_instances evolution_redis; do
+  docker volume create "$vol" >/dev/null 2>&1 || true
+done
+log_ok "Volumes criados!"
 
-cat > "$TMP_CONFIG" <<EOF
-{
-  "domain_base": "${BASE_DOMAIN}",
-  "email_ssl": "${SSL_EMAIL}",
-  "dashboard_domain": "${DASHBOARD_DOMAIN}",
-  "admin_email": "${ADMIN_EMAIL}",
-  "admin_password_hash": "${ADMIN_PASS_HASH}",
-  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
-
-# Preservar backups de instalação anterior
-[ -d "$INSTALL_DIR/backups" ] && cp -r "$INSTALL_DIR/backups" "$TMP_BACKUPS"
-
-log_ok "Configuração preparada"
-
-# ── Traefik ──
-log_step "Traefik (Proxy Reverso + SSL)"
-SWARM_MODE=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)
-IS_SWARM="false"
-[ "$SWARM_MODE" = "active" ] && IS_SWARM="true"
+# ══════════════════════════════════════
+# TRAEFIK v3.5.3
+# ══════════════════════════════════════
+log_step "🔒 Traefik (Proxy Reverso + SSL)"
+log_info "Instalando o Traefik... (ele cuida dos certificados SSL automaticamente)"
 
 TRAEFIK_COMPOSE="/tmp/traefik-compose.yml"
-cat > "$TRAEFIK_COMPOSE" <<EOF
+cat > "$TRAEFIK_COMPOSE" <<'TRAEFIKEOF'
 version: "3.8"
 services:
   traefik:
-    image: traefik:v2.11
+    image: traefik:v3.5.3
     command:
       - "--api.dashboard=false"
-      - "--providers.docker=true"
-      - "--providers.docker.swarmMode=${IS_SWARM}"
+      - "--providers.swarm=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=network_public"
       - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
       - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.letsencrypt.acme.email=${SSL_EMAIL}"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--entrypoints.web.transport.respondingTimeouts.idleTimeout=3600"
+      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencryptresolver.acme.email=__ADMIN_EMAIL__"
       - "--log.level=ERROR"
-    ports:
-      - "80:80"
-      - "443:443"
+      - "--log.format=common"
+      - "--log.filePath=/var/log/traefik/traefik.log"
+      - "--accesslog=true"
+      - "--accesslog.filepath=/var/log/traefik/access-log"
     volumes:
-      - traefik_certs:/letsencrypt
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - "vol_certificates:/etc/traefik/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
     networks:
       - network_public
+    ports:
+      - target: 80
+        published: 80
+        mode: host
+      - target: 443
+        published: 443
+        mode: host
     deploy:
       placement:
         constraints:
           - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.middlewares.redirect-https.redirectscheme.scheme=https"
+        - "traefik.http.middlewares.redirect-https.redirectscheme.permanent=true"
+        - "traefik.http.routers.http-catchall.rule=Host(`{host:.+}`)"
+        - "traefik.http.routers.http-catchall.entrypoints=web"
+        - "traefik.http.routers.http-catchall.middlewares=redirect-https@docker"
+        - "traefik.http.routers.http-catchall.priority=1"
 
 volumes:
-  traefik_certs:
+  vol_certificates:
+    external: true
+    name: volume_swarm_certificates
 
 networks:
   network_public:
     external: true
-EOF
+    name: network_public
+TRAEFIKEOF
 
-log_info "Fazendo deploy do Traefik..."
-if [ "$IS_SWARM" = "true" ]; then
-  docker stack deploy -c "$TRAEFIK_COMPOSE" traefik >/dev/null 2>&1
-else
-  docker compose -f "$TRAEFIK_COMPOSE" -p traefik up -d >/dev/null 2>&1
-fi
+sed -i "s|__ADMIN_EMAIL__|${ADMIN_EMAIL}|g" "$TRAEFIK_COMPOSE"
+
+docker stack deploy -c "$TRAEFIK_COMPOSE" traefik >/dev/null 2>&1
 rm -f "$TRAEFIK_COMPOSE"
-log_ok "Traefik rodando com SSL via Let's Encrypt"
+log_ok "Traefik rodando com SSL via Let's Encrypt!"
 
-# ── Download Panel ──
-log_step "N8N LABZ Panel"
+# ══════════════════════════════════════
+# PORTAINER + AGENT
+# ══════════════════════════════════════
+log_step "🐳 Portainer (Gerenciador de Containers)"
+log_info "Instalando Portainer + Agent..."
+
+PORTAINER_COMPOSE="/tmp/portainer-compose.yml"
+cat > "$PORTAINER_COMPOSE" <<'PORTAINEREOF'
+version: "3.8"
+services:
+  agent:
+    image: portainer/agent:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+    networks:
+      - agent_network
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.platform.os == linux
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    command: -H tcp://tasks.agent:9001 --tlsskipverify
+    volumes:
+      - portainer_data:/data
+    networks:
+      - network_public
+      - agent_network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.portainer.rule=Host(`__PORTAINER_DOMAIN__`)"
+        - "traefik.http.routers.portainer.entrypoints=websecure"
+        - "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+        - "traefik.docker.network=network_public"
+
+volumes:
+  portainer_data:
+    external: true
+    name: portainer_data
+
+networks:
+  network_public:
+    external: true
+    name: network_public
+  agent_network:
+    driver: overlay
+    attachable: true
+PORTAINEREOF
+
+sed -i "s|__PORTAINER_DOMAIN__|${PORTAINER_DOMAIN}|g" "$PORTAINER_COMPOSE"
+
+docker stack deploy -c "$PORTAINER_COMPOSE" portainer >/dev/null 2>&1
+rm -f "$PORTAINER_COMPOSE"
+log_ok "Portainer deployado!"
+
+# ── Aguardar Portainer ficar online ──
+log_info "Aguardando Portainer ficar online..."
+
+MAX_WAIT=300
+WAITED=0
+PORTAINER_READY=false
+
+while [ $WAITED -lt $MAX_WAIT ]; do
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://localhost:9000/api/status" 2>/dev/null || echo "000")
+  if [ "$HTTP_CODE" = "200" ]; then
+    PORTAINER_READY=true
+    break
+  fi
+  sleep 5
+  WAITED=$((WAITED + 5))
+done
+
+if [ "$PORTAINER_READY" = "true" ]; then
+  log_ok "Portainer online!"
+
+  # Auto-criar admin
+  INIT_RESPONSE=$(curl -s -X POST "http://localhost:9000/api/users/admin/init" \
+    -H "Content-Type: application/json" \
+    -d "{\"Username\":\"admin\",\"Password\":\"${ADMIN_PASS}\"}" 2>/dev/null)
+
+  if echo "$INIT_RESPONSE" | jq -e '.Id' >/dev/null 2>&1; then
+    log_ok "Admin do Portainer configurado automaticamente"
+  else
+    log_warn "Portainer pode já ter um admin configurado"
+  fi
+else
+  log_warn "Portainer não respondeu em 5 minutos. Configure o admin manualmente em https://${PORTAINER_DOMAIN}"
+fi
+
+# ══════════════════════════════════════
+# PAINEL N8N LABZ
+# ══════════════════════════════════════
+log_step "📦 N8N LABZ Panel"
 
 # Garantir que git está instalado
 if ! command -v git &>/dev/null; then
@@ -224,12 +335,15 @@ if ! command -v git &>/dev/null; then
   apt-get install -y git >/dev/null 2>&1
 fi
 
+# Preservar backups existentes
+TMP_BACKUPS="/tmp/n8nlabz-backups"
+[ -d "$INSTALL_DIR/backups" ] && cp -r "$INSTALL_DIR/backups" "$TMP_BACKUPS"
+
 if [ -d "$INSTALL_DIR/.git" ]; then
   log_info "Atualizando repositório..."
   cd "$INSTALL_DIR" && git pull >/dev/null 2>&1
   log_ok "Repositório atualizado"
 else
-  # Remover diretório existente (config/backups já salvos em /tmp)
   [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR"
 
   log_info "Clonando repositório..."
@@ -240,13 +354,36 @@ else
   log_ok "Repositório clonado em $INSTALL_DIR"
 fi
 
-# Restaurar config e backups
-cp "$TMP_CONFIG" "$INSTALL_DIR/config.json"
+# Restaurar backups
 [ -d "$TMP_BACKUPS" ] && cp -r "$TMP_BACKUPS" "$INSTALL_DIR/backups"
-rm -f "$TMP_CONFIG"
 rm -rf "$TMP_BACKUPS"
 mkdir -p "$INSTALL_DIR"/{backups,data}
-log_ok "Configuração restaurada em $INSTALL_DIR"
+
+# Salvar config
+IP=$(curl -s --max-time 5 ifconfig.me || hostname -I | awk '{print $1}')
+
+cat > "$INSTALL_DIR/config.json" <<EOF
+{
+  "domain_base": "${BASE_DOMAIN}",
+  "email_ssl": "${ADMIN_EMAIL}",
+  "dashboard_domain": "${DASHBOARD_DOMAIN}",
+  "admin_email": "${ADMIN_EMAIL}",
+  "admin_password_hash": "${ADMIN_PASS_HASH}",
+  "portainer_domain": "${PORTAINER_DOMAIN}",
+  "portainer_username": "admin",
+  "portainer_password": "${ADMIN_PASS}",
+  "ip": "${IP}",
+  "network_name": "network_public",
+  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+
+# Inicializar credentials.json
+if [ ! -f "$INSTALL_DIR/credentials.json" ]; then
+  echo '{}' > "$INSTALL_DIR/credentials.json"
+fi
+
+log_ok "Configuração salva"
 
 # Verificar arquivos essenciais
 if [ ! -f "$INSTALL_DIR/Dockerfile" ] || [ ! -d "$INSTALL_DIR/backend" ] || [ ! -d "$INSTALL_DIR/frontend" ]; then
@@ -254,29 +391,23 @@ if [ ! -f "$INSTALL_DIR/Dockerfile" ] || [ ! -d "$INSTALL_DIR/backend" ] || [ ! 
   exit 1
 fi
 
-# ── Build e deploy como container Docker ──
-log_step "Build do painel Docker"
+# ── Build ──
+log_step "🔨 Build do painel"
+log_info "Buildando imagem Docker... (pode demorar alguns minutos)"
 
 # Remover serviço systemd antigo se existir
 if systemctl is-enabled n8nlabz-panel &>/dev/null 2>&1; then
-  log_info "Removendo serviço systemd antigo..."
   systemctl stop n8nlabz-panel >/dev/null 2>&1 || true
   systemctl disable n8nlabz-panel >/dev/null 2>&1 || true
   rm -f /etc/systemd/system/n8nlabz-panel.service
   systemctl daemon-reload >/dev/null 2>&1
 fi
 
-if [ -f "$INSTALL_DIR/Dockerfile" ]; then
-  log_info "Buildando imagem Docker do painel..."
-  cd "$INSTALL_DIR" && docker build -t n8nlabz-panel:latest . >/dev/null 2>&1
-  log_ok "Imagem buildada"
-else
-  log_err "Dockerfile não encontrado em $INSTALL_DIR"
-  exit 1
-fi
+cd "$INSTALL_DIR" && docker build -t n8nlabz-panel:latest . >/dev/null 2>&1
+log_ok "Imagem buildada!"
 
-# ── Deploy do painel atrás do Traefik ──
-log_step "Deploy do painel"
+# ── Deploy do painel ──
+log_step "🚀 Deploy do painel"
 
 PANEL_COMPOSE="/tmp/panel-compose.yml"
 
@@ -288,6 +419,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - __INSTALL_DIR__/config.json:/opt/n8nlabz/config.json
+      - __INSTALL_DIR__/credentials.json:/opt/n8nlabz/credentials.json
       - __INSTALL_DIR__/backups:/opt/n8nlabz/backups
     environment:
       - NODE_ENV=production
@@ -302,101 +434,60 @@ services:
         - "traefik.enable=true"
         - "traefik.http.routers.n8nlabz.rule=Host(`__DASHBOARD_DOMAIN__`)"
         - "traefik.http.routers.n8nlabz.entrypoints=websecure"
-        - "traefik.http.routers.n8nlabz.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.n8nlabz.tls.certresolver=letsencryptresolver"
         - "traefik.http.services.n8nlabz.loadbalancer.server.port=3080"
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.n8nlabz.rule=Host(`__DASHBOARD_DOMAIN__`)"
-      - "traefik.http.routers.n8nlabz.entrypoints=websecure"
-      - "traefik.http.routers.n8nlabz.tls.certresolver=letsencrypt"
-      - "traefik.http.services.n8nlabz.loadbalancer.server.port=3080"
 
 networks:
   network_public:
     external: true
+    name: network_public
 COMPOSEEOF
 
 sed -i "s|__INSTALL_DIR__|${INSTALL_DIR}|g" "$PANEL_COMPOSE"
 sed -i "s|__DASHBOARD_DOMAIN__|${DASHBOARD_DOMAIN}|g" "$PANEL_COMPOSE"
 
-log_info "Fazendo deploy do painel..."
-if [ "$IS_SWARM" = "true" ]; then
-  docker stack deploy -c "$PANEL_COMPOSE" panel >/dev/null 2>&1
-else
-  docker compose -f "$PANEL_COMPOSE" -p panel up -d >/dev/null 2>&1
-fi
+docker stack deploy -c "$PANEL_COMPOSE" panel >/dev/null 2>&1
 rm -f "$PANEL_COMPOSE"
-log_ok "Painel rodando em https://${DASHBOARD_DOMAIN}"
+log_ok "Painel instalado!"
 
 # ── Aguardar estabilização ──
 log_info "Aguardando containers estabilizarem..."
-sleep 8
+sleep 10
 
-# ── DNS ──
-IP=$(curl -s --max-time 5 ifconfig.me || hostname -I | awk '{print $1}')
-
+# ══════════════════════════════════════
+# RESUMO FINAL
+# ══════════════════════════════════════
 echo ""
-echo -e "  ═══════════════════════════════════════════════════════"
-echo -e "  ${YELLOW}${BOLD}⚠  Configuração de DNS${NC}"
+echo -e "  ════════════════════════════════════════════════════════"
+echo -e "  ${GREEN}${BOLD}  🚀 N8N LABZ Setup Panel instalado com sucesso!${NC}"
+echo -e "  ════════════════════════════════════════════════════════"
 echo ""
-echo -e "  ${BOLD}Antes de acessar o painel, configure o DNS:${NC}"
+echo -e "  ${BOLD}🌐 Acesse o painel:${NC}"
+echo -e "  ${CYAN}   https://${DASHBOARD_DOMAIN}${NC}"
 echo ""
-echo -e "  ${CYAN}  dashboard.${BASE_DOMAIN}  →  ${IP}${NC}"
-echo -e "  ${CYAN}  portainer.${BASE_DOMAIN}   →  ${IP}${NC}"
-echo -e "  ${CYAN}  n8n.${BASE_DOMAIN}         →  ${IP}${NC}"
-echo -e "  ${CYAN}  evolution.${BASE_DOMAIN}    →  ${IP}${NC}"
+echo -e "  ${BOLD}🔑 Login:${NC}"
+echo -e "  ${CYAN}   Email: ${ADMIN_EMAIL}${NC}"
+echo -e "  ${CYAN}   Senha: (a que você definiu)${NC}"
 echo ""
-echo -e "  ${BOLD}Crie registros tipo A apontando para: ${IP}${NC}"
-echo -e "  ═══════════════════════════════════════════════════════"
+echo -e "  ${BOLD}🐳 Portainer:${NC}"
+echo -e "  ${CYAN}   https://${PORTAINER_DOMAIN}${NC}"
+echo -e "  ${CYAN}   Usuário: admin${NC}"
+echo -e "  ${CYAN}   Senha: (mesma do painel)${NC}"
 echo ""
-
-DNS_OK=""
-while [ -z "$DNS_OK" ]; do
-  printf "  Já configurou o DNS? (sim/não): " >&2
-  read DNS_OK < /dev/tty
-  DNS_OK=$(echo "$DNS_OK" | xargs | tr '[:upper:]' '[:lower:]')
-  case "$DNS_OK" in
-    sim|s|yes|y)
-      echo ""
-      log_ok "DNS configurado!"
-      ;;
-    nao|não|n|no)
-      echo ""
-      log_warn "Configure o DNS antes de acessar o painel."
-      log_info "Você pode configurar depois e acessar quando estiver pronto."
-      ;;
-    *)
-      log_warn "Responda sim ou não."
-      DNS_OK=""
-      ;;
-  esac
-done
-
-# ── Summary ──
+echo -e "  ${YELLOW}⚠️  Configure o DNS dos subdomínios apontando para: ${IP}${NC}"
 echo ""
-echo -e "  ═══════════════════════════════════════════════════════"
-echo -e "  ${GREEN}${BOLD}✅ Instalação concluída!${NC}"
-echo ""
-echo -e "  ${BOLD}Acesse o painel:${NC}"
-echo -e "  ${CYAN}➜  https://${DASHBOARD_DOMAIN}${NC}"
-echo ""
-echo -e "  ${BOLD}Login:${NC}"
-echo -e "  ${CYAN}  Email: ${ADMIN_EMAIL}${NC}"
-echo -e "  ${CYAN}  Senha: (a que você definiu)${NC}"
-echo ""
-echo -e "  ${BOLD}Domínio base:${NC} ${BASE_DOMAIN}"
-echo -e "  ${BOLD}Subdomínios sugeridos:${NC}"
-echo -e "  ${CYAN}  • Portainer:  portainer.${BASE_DOMAIN}${NC}"
-echo -e "  ${CYAN}  • n8n:        n8n.${BASE_DOMAIN}${NC}"
-echo -e "  ${CYAN}  • Evolution:  evolution.${BASE_DOMAIN}${NC}"
-echo ""
-echo -e "  ${YELLOW}⚠  Configure o DNS dos subdomínios apontando para: ${IP}${NC}"
+echo -e "  ${BOLD}Subdomínios para configurar no DNS:${NC}"
+echo -e "  ${CYAN}   dashboard.${BASE_DOMAIN}  →  ${IP}${NC}"
+echo -e "  ${CYAN}   portainer.${BASE_DOMAIN}  →  ${IP}${NC}"
+echo -e "  ${CYAN}   n8n.${BASE_DOMAIN}        →  ${IP}${NC}"
+echo -e "  ${CYAN}   webhook.${BASE_DOMAIN}    →  ${IP}${NC}"
+echo -e "  ${CYAN}   evolution.${BASE_DOMAIN}  →  ${IP}${NC}"
 echo ""
 echo -e "  ${BOLD}Comandos úteis:${NC}"
-echo -e "  ${CYAN}docker logs -f \$(docker ps -q -f name=n8nlabz_panel)${NC}  — Logs"
-echo -e "  ${CYAN}docker ps -f name=n8nlabz${NC}                             — Status"
+echo -e "  ${CYAN}  docker service ls${NC}                                    — Serviços"
+echo -e "  ${CYAN}  docker logs -f \$(docker ps -q -f name=n8nlabz_panel)${NC} — Logs"
 echo ""
-echo -e "  ═══════════════════════════════════════════════════════"
-echo -e "  ${RED}N8N LABZ${NC} — Comunidade de Automação"
-echo -e "  ═══════════════════════════════════════════════════════"
+echo -e "  ════════════════════════════════════════════════════════"
+echo -e "  ${RED}N8N LABZ${NC} — Comunidade de Automação 🔥"
+echo -e "  ════════════════════════════════════════════════════════"
 echo ""
